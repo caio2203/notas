@@ -1,6 +1,6 @@
 # Binário compilado
 bin/
-notas
+/notas
 
 # Banco de dados local (gerado automaticamente)
 *.db
