@@ -1,0 +1,22 @@
+# Binário compilado
+bin/
+notas
+
+# Banco de dados local (gerado automaticamente)
+*.db
+*.db-shm
+*.db-wal
+
+# Vault pessoal (cada usuário tem o seu)
+vault/
+
+# Ambiente Go
+*.test
+*.out
+cover.html
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
