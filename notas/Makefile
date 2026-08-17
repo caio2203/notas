@@ -1,9 +1,16 @@
 BINARY  := notas
 VERSION := $(shell git describe --tags --always --dirty)
 LDFLAGS := -s -w -X main.version=$(VERSION)
+PREFIX  ?= /usr/local
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/notas
+
+install: build
+	install -Dm755 bin/$(BINARY) $(DESTDIR)$(PREFIX)/bin/$(BINARY)
+
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/$(BINARY)
 
 release:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \

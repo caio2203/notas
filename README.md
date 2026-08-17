@@ -290,16 +290,34 @@ make release
 
 # Cross-compile para múltiplas plataformas
 make build-all
+
+# Instalar no sistema (fica em /usr/local/bin — basta digitar `notas`)
+sudo make install
+# Desinstalar
+sudo make uninstall
 ```
+
+> Sem `make install`, o binário fica em `bin/notas` (dentro do projeto) e
+> **não** está no `PATH` — por isso digitar `notas` não abre. Use
+> `sudo make install`, ou `./bin/notas` para rodar sem instalar. Para instalar
+> sem `sudo`, use um prefixo do seu usuário: `make install PREFIX=~/.local`
+> (garanta que `~/.local/bin` está no `PATH`).
 
 `Makefile`:
 ```makefile
 BINARY  := notas
 VERSION := $(shell git describe --tags --always --dirty)
 LDFLAGS := -s -w -X main.version=$(VERSION)
+PREFIX  ?= /usr/local
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/notas
+
+install: build
+	install -Dm755 bin/$(BINARY) $(DESTDIR)$(PREFIX)/bin/$(BINARY)
+
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/$(BINARY)
 
 release:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
