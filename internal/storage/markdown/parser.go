@@ -35,8 +35,13 @@ func ParseFile(path string) (*model.Note, error) {
 		rest = data
 	}
 
-	// Fallback de título: nome do arquivo sem extensão
+	// Título: frontmatter → 1ª linha do corpo → nome do arquivo
 	title := fm.Title
+	if title == "" || title == "Nova Nota" {
+		if t := deriveTitle(string(rest)); t != "" {
+			title = t
+		}
+	}
 	if title == "" {
 		base := filepath.Base(path)
 		title = strings.TrimSuffix(base, filepath.Ext(base))
@@ -132,6 +137,23 @@ func ExtractWikilinks(body string) []string {
 		i++
 	}
 	return links
+}
+
+// deriveTitle extrai um título da primeira linha não-vazia do corpo
+// (removendo marcadores '#' de heading). Limita o tamanho para caber na lista.
+func deriveTitle(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimSpace(strings.TrimLeft(line, "#"))
+		if line == "" {
+			continue
+		}
+		if len(line) > 80 {
+			line = line[:80]
+		}
+		return line
+	}
+	return ""
 }
 
 // Slugify converte um título em slug URL-safe

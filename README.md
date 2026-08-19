@@ -224,18 +224,17 @@ notas/
 
 ## Atalhos de Teclado (Keymap padrão)
 
-| Tecla             | Ação                                      |
-|-------------------|-------------------------------------------|
-| `Ctrl+P`          | Abrir fuzzy finder (todas as notas)       |
-| `Ctrl+N`          | Nova nota                                 |
-| `Ctrl+F`          | Busca full-text no conteúdo               |
-| `Ctrl+T`          | Filtrar por tag                           |
-| `Ctrl+L`          | Ver backlinks da nota atual               |
-| `Ctrl+E`          | Abrir nota no editor externo (`$EDITOR`)  |
-| `Ctrl+P`          | Painel de propriedades                    |
-| `[[ `             | Autocompletar wikilink (dentro do editor) |
-| `Esc`             | Fechar painel flutuante / voltar          |
-| `?`               | Ajuda inline                              |
+| Tecla             | Ação                                                        |
+|-------------------|-------------------------------------------------------------|
+| `Ctrl+N`          | Nova nota (cria o `.md` e abre no `$EDITOR`)                |
+| `Ctrl+P`          | Abrir busca; digite para filtrar (full-text: título+corpo+tags) |
+| `#tag`            | Dentro da busca, prefixe com `#` para filtrar por tag       |
+| `b`               | Ver backlinks da nota selecionada                           |
+| `Enter`           | Abrir nota selecionada no `$EDITOR`                         |
+| `d`               | Deletar nota selecionada (pede confirmação com outro `d`)   |
+| `↑` / `↓`         | Navegar na lista / nos resultados                           |
+| `Esc`             | Fechar painel de busca ou backlinks                         |
+| `q` / `Ctrl+C`    | Sair                                                        |
 
 ---
 
@@ -260,6 +259,19 @@ date_format = "2006-01-02"   # Formato Go de data
 [sync]
 watch = true                 # Monitorar vault com inotify para reindexar
 ```
+
+> ⚠️ O `config.toml` acima é o alvo do design; ainda **não** é lido. O que já funciona hoje:
+
+**Onde as notas ficam (ordem de prioridade):**
+
+1. Flag `--vault <caminho>` — `notas --vault ~/meu-vault`
+2. Variável de ambiente `NOTAS_VAULT` — `NOTAS_VAULT=~/meu-vault notas`
+3. Pasta `vault/` no diretório atual (se existir) — útil rodando dentro do projeto
+4. Padrão: `~/notas/vault`
+
+O vault é **criado automaticamente** se não existir (não precisa mais `mkdir` antes da primeira nota). O índice SQLite fica em `~/.config/notas/index.db`.
+
+**Título automático:** ao criar uma nota (`Ctrl+N`) e escrever um `# Cabeçalho` (ou qualquer primeira linha), esse texto vira o título exibido na lista assim que você salvar — não precisa editar o `title:` do frontmatter à mão.
 
 ---
 

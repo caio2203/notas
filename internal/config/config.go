@@ -34,6 +34,9 @@ func Default() *Config {
 		vaultPath = filepath.Join(home, "notas", "vault")
 	}
 
+	// garante que o vault exista (instalação global ainda não tem a pasta)
+	os.MkdirAll(vaultPath, 0755)
+
 	return &Config{
 		VaultPath:  vaultPath,
 		DBPath:     filepath.Join(home, ".config", "notas", "index.db"),

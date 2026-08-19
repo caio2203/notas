@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -49,7 +50,7 @@ func (i noteItem) FilterValue() string { return i.n.Title }
 type noteDelegate struct{}
 
 func (d noteDelegate) Height() int                             { return 2 }
-func (d noteDelegate) Spacing() int                           { return 1 }
+func (d noteDelegate) Spacing() int                            { return 1 }
 func (d noteDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 func (d noteDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	ni, ok := item.(noteItem)
@@ -90,6 +91,9 @@ func createNote(cfg *config.Config) tea.Cmd {
 		path := filepath.Join(cfg.VaultPath, slug+".md")
 		content := fmt.Sprintf("---\nid: %s\ntitle: Nova Nota\ntags: []\ncreated_at: %s\nupdated_at: %s\n---\n\n",
 			slug, now.Format(time.RFC3339), now.Format(time.RFC3339))
+		if err := os.MkdirAll(cfg.VaultPath, 0755); err != nil {
+			return editorDoneMsg{err: fmt.Errorf("criar vault: %w", err)}
+		}
 		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 			return editorDoneMsg{err: fmt.Errorf("criar nota: %w", err)}
 		}
@@ -125,6 +129,8 @@ type Model struct {
 	fuzzyOpen     bool
 	fuzzyInput    textinput.Model
 	fuzzyResults  []noteItem
+	fuzzyBase     []noteItem // conjunto sobre o qual a busca filtra (todas ou backlinks)
+	fuzzyMode     string     // "search" | "backlinks"
 	fuzzyIndex    int
 	allNotes      []noteItem
 	statusMsg     string
@@ -148,11 +154,11 @@ func InitialModel() Model {
 	ti.Width = 50
 
 	return Model{
-		noteList:  l,
+		noteList:   l,
 		fuzzyInput: ti,
-		statusMsg: fmt.Sprintf("Indexando vault: %s ...", cfg.VaultPath),
-		cfg:       cfg,
-		loading:   true,
+		statusMsg:  fmt.Sprintf("Indexando vault: %s ...", cfg.VaultPath),
+		cfg:        cfg,
+		loading:    true,
 	}
 }
 
@@ -227,7 +233,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.noteList.SetItems(items)
 		m.allNotes = all
 		m.fuzzyResults = all
-		m.statusMsg = fmt.Sprintf("Ctrl+N nova  |  Ctrl+P buscar  |  Enter abrir  |  d deletar  |  q sair  (%d notas)", len(msg.notes))
+		m.statusMsg = helpStatus(len(msg.notes))
 		return m, nil
 
 	case tea.KeyMsg:
@@ -237,14 +243,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, deleteNote(m.pendingDelete.Path)
 			}
 			m.pendingDelete = nil
-			m.statusMsg = fmt.Sprintf("Ctrl+N nova  |  Ctrl+P buscar  |  Enter abrir  |  d deletar  |  q sair  (%d notas)", len(m.allNotes))
+			m.statusMsg = helpStatus(len(m.allNotes))
 			return m, nil
 		}
 		if msg.String() == "esc" && m.fuzzyOpen {
 			m.fuzzyOpen = false
 			m.fuzzyInput.SetValue("")
 			m.fuzzyResults = m.allNotes
-			m.statusMsg = fmt.Sprintf("Ctrl+N nova  |  Ctrl+P buscar  |  Enter abrir  |  d deletar  |  q sair  (%d notas)", len(m.allNotes))
+			m.statusMsg = helpStatus(len(m.allNotes))
 			return m, nil
 		}
 		if msg.String() == "ctrl+c" || (!m.fuzzyOpen && msg.String() == "q") {
@@ -268,11 +274,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if !m.fuzzyOpen && msg.String() == "b" {
+			if item := m.noteList.SelectedItem(); item != nil {
+				ni := item.(noteItem)
+				m.fuzzyOpen = true
+				m.fuzzyMode = "backlinks"
+				m.fuzzyBase = backlinksFor(m.allNotes, ni.n)
+				m.fuzzyResults = m.fuzzyBase
+				m.fuzzyIndex = 0
+				m.fuzzyInput.SetValue("")
+				m.statusMsg = "↑↓ navegar  |  Enter abrir  |  Esc fechar"
+				return m, m.fuzzyInput.Focus()
+			}
+			return m, nil
+		}
 		if msg.String() == "ctrl+p" {
 			m.fuzzyOpen = !m.fuzzyOpen
+			m.fuzzyMode = "search"
+			m.fuzzyBase = m.allNotes
 			m.fuzzyIndex = 0
 			m.fuzzyResults = m.allNotes
-			m.statusMsg = "↑↓ navegar  |  Enter abrir  |  Esc fechar"
+			m.fuzzyInput.SetValue("")
+			m.statusMsg = "↑↓ navegar  |  Enter abrir  |  Esc fechar  |  #tag filtra por tag"
 			if m.fuzzyOpen {
 				return m, m.fuzzyInput.Focus()
 			}
@@ -298,7 +321,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			default:
 				var cmd tea.Cmd
 				m.fuzzyInput, cmd = m.fuzzyInput.Update(msg)
-				m.fuzzyResults = filterNotes(m.allNotes, m.fuzzyInput.Value())
+				m.fuzzyResults = filterNotes(m.fuzzyBase, m.fuzzyInput.Value())
 				m.fuzzyIndex = 0
 				return m, cmd
 			}
@@ -310,18 +333,57 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// filterNotes faz busca full-text (título + corpo + tags). Prefixo '#' filtra por tag.
+// ponytail: busca linear em memória; migrar p/ FTS5 (tabela virtual) só se o vault não couber em RAM.
 func filterNotes(notes []noteItem, q string) []noteItem {
+	q = strings.ToLower(strings.TrimSpace(q))
 	if q == "" {
 		return notes
 	}
-	q = strings.ToLower(q)
+	// #tag → filtra por tag em vez de full-text
+	if strings.HasPrefix(q, "#") {
+		tag := strings.TrimPrefix(q, "#")
+		var out []noteItem
+		for _, ni := range notes {
+			for _, t := range ni.n.Tags {
+				if strings.Contains(strings.ToLower(t), tag) {
+					out = append(out, ni)
+					break
+				}
+			}
+		}
+		return out
+	}
 	var out []noteItem
 	for _, ni := range notes {
-		if strings.Contains(strings.ToLower(ni.n.Title), q) {
+		hay := strings.ToLower(ni.n.Title + "\n" + ni.n.Body + "\n" + strings.Join(ni.n.Tags, " "))
+		if strings.Contains(hay, q) {
 			out = append(out, ni)
 		}
 	}
 	return out
+}
+
+// backlinksFor retorna as notas que apontam para target via [[wikilink]].
+func backlinksFor(all []noteItem, target *model.Note) []noteItem {
+	var out []noteItem
+	for _, ni := range all {
+		if ni.n.ID == target.ID {
+			continue
+		}
+		for _, l := range ni.n.Links {
+			if mdstore.Slugify(l) == target.Slug || strings.EqualFold(l, target.Title) {
+				out = append(out, ni)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// helpStatus é a barra de ajuda padrão do rodapé.
+func helpStatus(n int) string {
+	return fmt.Sprintf("Ctrl+N nova  |  Ctrl+P buscar  |  b backlinks  |  Enter abrir  |  d deletar  |  q sair  (%d notas)", n)
 }
 
 func (m Model) View() string {
@@ -329,24 +391,28 @@ func (m Model) View() string {
 		return "Carregando...\n"
 	}
 
-	logo  := styleLogo.Render("◆ notas")
-	ver   := lipgloss.NewStyle().Foreground(colorMuted).Render(" v0.1.0")
+	logo := styleLogo.Render("◆ notas")
+	ver := lipgloss.NewStyle().Foreground(colorMuted).Render(" v0.1.0")
 	count := lipgloss.NewStyle().Foreground(colorTeal).Render(fmt.Sprintf("%d notas", len(m.allNotes)))
-	gap   := m.width - lipgloss.Width(logo+ver) - lipgloss.Width(count) - 2
+	gap := m.width - lipgloss.Width(logo+ver) - lipgloss.Width(count) - 2
 	if gap < 0 {
 		gap = 0
 	}
 	header := logo + ver + strings.Repeat(" ", gap) + count
-	sep    := styleSep.Render(strings.Repeat("─", m.width))
+	sep := styleSep.Render(strings.Repeat("─", m.width))
 	status := styleStatusBar.Width(m.width).Render(m.statusMsg)
 
 	if !m.fuzzyOpen {
 		return strings.Join([]string{header, sep, m.noteList.View(), sep, status}, "\n")
 	}
 
-	floatTitle := styleFloatTitle.Render("  Buscar Notas")
-	input      := "  >> " + m.fuzzyInput.View()
-	innerSep   := styleSep.Render(strings.Repeat("─", 52))
+	panelTitle := "  Buscar Notas"
+	if m.fuzzyMode == "backlinks" {
+		panelTitle = "  Backlinks"
+	}
+	floatTitle := styleFloatTitle.Render(panelTitle)
+	input := "  >> " + m.fuzzyInput.View()
+	innerSep := styleSep.Render(strings.Repeat("─", 52))
 
 	var lines []string
 	max := 8
@@ -357,7 +423,7 @@ func (m Model) View() string {
 		ni := m.fuzzyResults[i]
 		tags := ""
 		for _, t := range ni.n.Tags {
-			tags += styleTag.Render("#"+t)
+			tags += styleTag.Render("#" + t)
 		}
 		if i == m.fuzzyIndex {
 			lines = append(lines, styleSelected.Render("  ▸ "+ni.n.Title))
@@ -369,10 +435,14 @@ func (m Model) View() string {
 		}
 	}
 	if len(m.fuzzyResults) == 0 {
-		lines = []string{lipgloss.NewStyle().Foreground(colorMuted).Render("    Nenhuma nota encontrada")}
+		empty := "    Nenhuma nota encontrada"
+		if m.fuzzyMode == "backlinks" {
+			empty = "    Nenhuma nota aponta para esta"
+		}
+		lines = []string{lipgloss.NewStyle().Foreground(colorMuted).Render(empty)}
 	}
 	counter := lipgloss.NewStyle().Foreground(colorMuted).Render(fmt.Sprintf("  %d resultado(s)", len(m.fuzzyResults)))
-	panel   := styleFloat.Render(strings.Join([]string{floatTitle, input, innerSep, strings.Join(lines, "\n"), innerSep, counter}, "\n"))
+	panel := styleFloat.Render(strings.Join([]string{floatTitle, input, innerSep, strings.Join(lines, "\n"), innerSep, counter}, "\n"))
 
 	hOffset := (m.width - lipgloss.Width(panel)) / 2
 	if hOffset < 0 {
@@ -383,6 +453,12 @@ func (m Model) View() string {
 }
 
 func main() {
+	vault := flag.String("vault", "", "caminho do vault (sobrepõe $NOTAS_VAULT e o padrão)")
+	flag.Parse()
+	if *vault != "" {
+		os.Setenv("NOTAS_VAULT", *vault) // config.Default() lê essa env
+	}
+
 	p := tea.NewProgram(InitialModel(), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
