@@ -12,7 +12,9 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/seuusuario/notas/internal/config"
@@ -124,19 +126,99 @@ func openInEditor(path string) tea.Cmd {
 }
 
 type Model struct {
-	width, height int
-	noteList      list.Model
-	fuzzyOpen     bool
-	fuzzyInput    textinput.Model
-	fuzzyResults  []noteItem
-	fuzzyBase     []noteItem // conjunto sobre o qual a busca filtra (todas ou backlinks)
-	fuzzyMode     string     // "search" | "backlinks"
-	fuzzyIndex    int
-	allNotes      []noteItem
-	statusMsg     string
-	cfg           *config.Config
-	loading       bool
-	pendingDelete *model.Note
+	width, height  int
+	noteList       list.Model
+	fuzzyOpen      bool
+	fuzzyInput     textinput.Model
+	fuzzyResults   []noteItem
+	fuzzyBase      []noteItem // conjunto sobre o qual a busca filtra (todas ou backlinks)
+	fuzzyMode      string     // "search" | "backlinks"
+	fuzzyIndex     int
+	allNotes       []noteItem
+	statusMsg      string
+	cfg            *config.Config
+	loading        bool
+	pendingDelete  *model.Note
+	previewOpen    bool
+	previewNote    *model.Note
+	previewLinks   []*model.Note // wikilinks de saída resolvidos (para seguir com 1-9)
+	previewHistory []*model.Note // pilha para "voltar" (Backspace)
+	viewport       viewport.Model
+}
+
+// resolveLink acha a nota-alvo de um wikilink (por slug ou título).
+func resolveLink(all []noteItem, target string) *model.Note {
+	ts := mdstore.Slugify(target)
+	for _, ni := range all {
+		if ni.n.Slug == ts || strings.EqualFold(ni.n.Title, target) {
+			return ni.n
+		}
+	}
+	return nil
+}
+
+// outgoingLinks resolve os [[wikilinks]] da nota para notas existentes (dedup).
+// ponytail: numeração 1-9 no preview; >9 links seguem via lista se um dia precisar.
+func outgoingLinks(all []noteItem, n *model.Note) []*model.Note {
+	var out []*model.Note
+	seen := map[string]bool{}
+	for _, l := range n.Links {
+		if t := resolveLink(all, l); t != nil && !seen[t.ID] {
+			out = append(out, t)
+			seen[t.ID] = true
+		}
+	}
+	return out
+}
+
+// previewStatus monta a barra do preview, listando os links seguíveis (até 9).
+func previewStatus(links []*model.Note) string {
+	if len(links) == 0 {
+		return "E editar  |  ↑↓ / PgUp / PgDn rolar  |  Esc voltar"
+	}
+	s := "Ir p/: "
+	for i, l := range links {
+		if i == 9 {
+			break
+		}
+		s += fmt.Sprintf("[%d] %s  ", i+1, l.Title)
+	}
+	return s + "|  E editar  |  Bksp voltar  |  Esc sair"
+}
+
+// previewBody devolve o corpo pronto para render (placeholder se vazio)
+func previewBody(n *model.Note) string {
+	if strings.TrimSpace(n.Body) == "" {
+		return "*(nota vazia)*"
+	}
+	return n.Body
+}
+
+// renderMarkdown converte markdown em texto estilizado para o terminal
+func renderMarkdown(body string, width int) string {
+	if width < 20 {
+		width = 20 // piso p/ evitar wrap inválido antes do tamanho da janela chegar
+	}
+	r, err := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(width))
+	if err != nil {
+		return body
+	}
+	out, err := r.Render(body)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+// setPreview renderiza a nota no painel de leitura e recalcula os links seguíveis.
+// Não mexe no histórico — quem chama decide (abrir do zero, seguir link ou voltar).
+func (m *Model) setPreview(n *model.Note) {
+	m.previewOpen = true
+	m.previewNote = n
+	m.viewport = viewport.New(m.width-2, m.height-5)
+	m.viewport.SetContent(renderMarkdown(previewBody(n), m.width-4))
+	m.previewLinks = outgoingLinks(m.allNotes, n)
+	m.statusMsg = previewStatus(m.previewLinks)
 }
 
 func InitialModel() Model {
@@ -196,6 +278,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.noteList.SetSize(msg.Width-2, msg.Height-5)
+		if m.previewOpen {
+			m.viewport.Width = msg.Width - 2
+			m.viewport.Height = msg.Height - 5
+			m.viewport.SetContent(renderMarkdown(previewBody(m.previewNote), msg.Width-4))
+		}
 		return m, nil
 
 	case newNoteReadyMsg:
@@ -237,6 +324,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Preview aberto — modal de leitura, intercepta as teclas
+		if m.previewOpen {
+			s := msg.String()
+			switch {
+			case s == "ctrl+c":
+				return m, tea.Quit
+			case s == "e" || s == "E" || s == "enter":
+				m.previewOpen = false
+				m.previewHistory = nil
+				return m, openInEditor(m.previewNote.Path)
+			case s == "esc" || s == "q":
+				m.previewOpen = false
+				m.previewHistory = nil
+				m.statusMsg = helpStatus(len(m.allNotes))
+				return m, nil
+			case s == "backspace":
+				if len(m.previewHistory) > 0 {
+					prev := m.previewHistory[len(m.previewHistory)-1]
+					m.previewHistory = m.previewHistory[:len(m.previewHistory)-1]
+					m.setPreview(prev)
+				}
+				return m, nil
+			case len(s) == 1 && s[0] >= '1' && s[0] <= '9':
+				if idx := int(s[0] - '1'); idx < len(m.previewLinks) {
+					m.previewHistory = append(m.previewHistory, m.previewNote)
+					m.setPreview(m.previewLinks[idx])
+				}
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.viewport, cmd = m.viewport.Update(msg)
+				return m, cmd
+			}
+		}
 		// Confirmação de delete — intercepta todas as teclas
 		if m.pendingDelete != nil {
 			if msg.String() == "d" {
@@ -271,6 +392,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if item := m.noteList.SelectedItem(); item != nil {
 				ni := item.(noteItem)
 				return m, openInEditor(ni.n.Path)
+			}
+			return m, nil
+		}
+		if !m.fuzzyOpen && msg.String() == " " {
+			if item := m.noteList.SelectedItem(); item != nil {
+				ni := item.(noteItem)
+				m.previewHistory = nil
+				m.setPreview(ni.n)
 			}
 			return m, nil
 		}
@@ -383,7 +512,7 @@ func backlinksFor(all []noteItem, target *model.Note) []noteItem {
 
 // helpStatus é a barra de ajuda padrão do rodapé.
 func helpStatus(n int) string {
-	return fmt.Sprintf("Ctrl+N nova  |  Ctrl+P buscar  |  b backlinks  |  Enter abrir  |  d deletar  |  q sair  (%d notas)", n)
+	return fmt.Sprintf("Ctrl+N nova  |  Espaço ler  |  Enter editar  |  Ctrl+P buscar  |  b backlinks  |  d deletar  |  q sair  (%d notas)", n)
 }
 
 func (m Model) View() string {
@@ -401,6 +530,10 @@ func (m Model) View() string {
 	header := logo + ver + strings.Repeat(" ", gap) + count
 	sep := styleSep.Render(strings.Repeat("─", m.width))
 	status := styleStatusBar.Width(m.width).Render(m.statusMsg)
+
+	if m.previewOpen {
+		return strings.Join([]string{header, sep, m.viewport.View(), sep, status}, "\n")
+	}
 
 	if !m.fuzzyOpen {
 		return strings.Join([]string{header, sep, m.noteList.View(), sep, status}, "\n")
@@ -444,12 +577,9 @@ func (m Model) View() string {
 	counter := lipgloss.NewStyle().Foreground(colorMuted).Render(fmt.Sprintf("  %d resultado(s)", len(m.fuzzyResults)))
 	panel := styleFloat.Render(strings.Join([]string{floatTitle, input, innerSep, strings.Join(lines, "\n"), innerSep, counter}, "\n"))
 
-	hOffset := (m.width - lipgloss.Width(panel)) / 2
-	if hOffset < 0 {
-		hOffset = 0
-	}
-	pad := strings.Repeat(" ", hOffset)
-	return strings.Join([]string{header, sep, pad + panel, sep, status}, "\n")
+	// centraliza a caixa inteira (todas as linhas), não só a primeira
+	centered := lipgloss.PlaceHorizontal(m.width, lipgloss.Center, panel)
+	return strings.Join([]string{header, sep, centered, sep, status}, "\n")
 }
 
 func main() {

@@ -222,6 +222,79 @@ notas/
 
 ---
 
+## Funcionalidades (como usar)
+
+As features cobrem o ciclo de vida de uma nota ponta a ponta — **criar**, **achar** e **conectar** — sem fricção. Três delas (busca, tags e backlinks) reaproveitam dados que já eram extraídos e mantidos em memória, por isso são leves e não adicionam dependências nem tabelas.
+
+### Busca full-text
+
+`Ctrl+P` abre a busca. O que você digita é casado contra **título + corpo + tags**, não só o título.
+
+Na prática você raramente lembra o título exato de uma nota antiga — lembra de um trecho. Anotou "usar `WAL` no SQLite" dentro da nota "Banco de dados"? Buscar por `WAL` acha, mesmo o termo estando só no corpo.
+
+> Busca linear em memória. Para vaults muito grandes (que não caibam em RAM) o caminho de evolução é uma tabela virtual **FTS5** no SQLite.
+
+### Filtro por tag
+
+Dentro da busca (`Ctrl+P`), prefixe o termo com `#`:
+
+```
+#go        → lista só as notas com a tag "go"
+#receitas  → só as notas de receitas
+```
+
+É um "modo coleção": em vez de procurar *uma* nota, você vê **todas de um tema**. As tags vêm do frontmatter (`tags: [go, sqlite]`), então basta preenchê-las para navegar por elas.
+
+### Backlinks (segundo cérebro)
+
+Com uma nota selecionada, aperte **`b`** para ver todas as notas que **apontam para ela**.
+
+Links `[[assim]]` você cria conscientemente (ida); os **backlinks** (volta) emergem sozinhos e revelam conexões que você não lembrava ter feito. É o que transforma uma pasta de `.md` numa **rede de conhecimento** navegável.
+
+**Como referenciar outra nota (wikilink):** dentro do corpo de uma nota, escreva o título de outra entre colchetes duplos:
+
+```markdown
+Veja também [[Arquitetura Hexagonal]].
+Com texto alternativo visível: [[Arquitetura Hexagonal|padrão hexagonal]].
+```
+
+- O alvo é resolvido pelo **título** da nota destino (sem diferenciar maiúsculas) ou pelo seu slug.
+- A parte depois do `|` é só um apelido de exibição; quem define o destino é a parte **antes** do `|`.
+- Ao salvar, o link é indexado: abra a nota "Arquitetura Hexagonal", aperte `b`, e a nota que a citou aparece ali.
+
+Além da volta (backlinks), dá para **seguir a ida**: no painel de leitura (`Espaço`), os wikilinks resolvidos aparecem numerados na barra inferior — aperte o dígito (`1`–`9`) para pular para a nota destino, e `Backspace` para voltar. Veja [Painel de leitura](#painel-de-leitura-preview-de-markdown).
+
+### Vault flexível + criação automática
+
+- O vault (pasta das notas) é **criado automaticamente** se não existir — a primeira nota (`Ctrl+N`) nunca falha por falta de diretório.
+- `notas --vault ~/trabalho` aponta para qualquer vault na hora, sem editar variável de ambiente. Permite manter **vaults separados** (pessoal, trabalho, projeto X) e alternar num comando.
+
+A ordem de resolução do vault está documentada em [Configuração](#configuração-confignotasconfigtoml).
+
+### Título automático pela 1ª linha
+
+Ao criar uma nota (`Ctrl+N`), escreva um cabeçalho ou qualquer primeira linha:
+
+```markdown
+# Minha ideia
+
+corpo da nota...
+```
+
+Ao salvar, **"Minha ideia" vira o título** exibido na lista — sem precisar editar o campo `title:` do frontmatter à mão. Isso alinha o app com como você realmente escreve (o título no fluxo, como heading) em vez de exigir um passo separado. Sem heading, cai para o nome do arquivo.
+
+### Painel de leitura (preview de markdown)
+
+`Espaço` sobre uma nota (na lista) abre um **painel de leitura** com o markdown renderizado — cabeçalhos, negrito, listas, código e citações estilizados no terminal (via [`glamour`](https://github.com/charmbracelet/glamour)). Role com `↑`/`↓` ou `PgUp`/`PgDn`. `Enter`, por sua vez, vai **direto ao editor** (edição rápida sem passar pelo preview).
+
+O fluxo é **ler primeiro, editar quando precisar**: está lendo e viu algo para mudar? Aperte **`E`** (ou `Enter`) e a mesma nota abre no `$EDITOR`. `Esc` (ou `q`) fecha o painel e volta para a lista.
+
+**Seguir wikilinks:** se a nota em leitura tem links `[[...]]` para outras notas existentes, eles aparecem numerados na barra inferior (`Ir p/: [1] Foo  [2] Bar`). Aperte o dígito para **pular** para a nota destino; `Backspace` volta pela trilha que você percorreu. É assim que você navega o grafo de conhecimento sem sair da leitura.
+
+Isso evita abrir o editor só para dar uma olhada numa nota — o que, num app de notas que você consulta o tempo todo, é o atrito que mais aparece.
+
+---
+
 ## Atalhos de Teclado (Keymap padrão)
 
 | Tecla             | Ação                                                        |
@@ -230,11 +303,16 @@ notas/
 | `Ctrl+P`          | Abrir busca; digite para filtrar (full-text: título+corpo+tags) |
 | `#tag`            | Dentro da busca, prefixe com `#` para filtrar por tag       |
 | `b`               | Ver backlinks da nota selecionada                           |
-| `Enter`           | Abrir nota selecionada no `$EDITOR`                         |
+| `Espaço`          | Abrir a nota no painel de leitura (preview renderizado)     |
+| `Enter`           | Abrir a nota direto no `$EDITOR` (edição rápida)            |
+| `E` / `Enter`     | **No preview:** abrir a nota no `$EDITOR`                    |
+| `1`–`9`           | **No preview:** seguir o wikilink numerado na barra inferior |
+| `Backspace`       | **No preview:** voltar para a nota anterior da trilha        |
+| `↑` `↓` / `PgUp` `PgDn` | **No preview:** rolar o conteúdo                      |
 | `d`               | Deletar nota selecionada (pede confirmação com outro `d`)   |
 | `↑` / `↓`         | Navegar na lista / nos resultados                           |
-| `Esc`             | Fechar painel de busca ou backlinks                         |
-| `q` / `Ctrl+C`    | Sair                                                        |
+| `Esc`             | Fechar preview, busca ou backlinks                          |
+| `q` / `Ctrl+C`    | Sair (`q` também fecha o preview)                           |
 
 ---
 
@@ -260,7 +338,7 @@ date_format = "2006-01-02"   # Formato Go de data
 watch = true                 # Monitorar vault com inotify para reindexar
 ```
 
-> ⚠️ O `config.toml` acima é o alvo do design; ainda **não** é lido. O que já funciona hoje:
+> O `config.toml` acima é o alvo do design; ainda **não** é lido. O que já funciona hoje:
 
 **Onde as notas ficam (ordem de prioridade):**
 

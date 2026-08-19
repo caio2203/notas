@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/seuusuario/notas/internal/model"
 )
 
@@ -27,6 +28,50 @@ func TestFilterNotes(t *testing.T) {
 	}
 	if got := filterNotes(all, ""); len(got) != 2 {
 		t.Errorf("query vazia devia retornar tudo, veio %d", len(got))
+	}
+}
+
+func TestPreviewAndFollowLink(t *testing.T) {
+	m := InitialModel()
+	step := func(msg tea.Msg) { mm, _ := m.Update(msg); m = mm.(Model) }
+
+	step(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a := &model.Note{ID: "a", Slug: "nota-a", Title: "Nota A", Body: "veja [[Nota B]]", Links: []string{"Nota B"}, Path: "/tmp/a.md"}
+	b := &model.Note{ID: "b", Slug: "nota-b", Title: "Nota B", Body: "conteudo B", Path: "/tmp/b.md"}
+	step(indexDoneMsg{notes: []*model.Note{a, b}})
+
+	// Espaço abre o preview da nota A (selecionada)
+	step(tea.KeyMsg{Type: tea.KeySpace})
+	if !m.previewOpen || m.previewNote != a {
+		t.Fatalf("Espaço deveria abrir o preview de A; open=%v", m.previewOpen)
+	}
+	if len(m.previewLinks) != 1 || m.previewLinks[0] != b {
+		t.Fatalf("A deveria ter 1 wikilink resolvido (B); got %v", m.previewLinks)
+	}
+	if m.View() == "" {
+		t.Fatal("View não deveria ser vazio no preview")
+	}
+
+	// "1" segue o wikilink para B, empilhando A no histórico
+	step(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
+	if m.previewNote != b {
+		t.Fatalf("seguir link deveria ir para B; previewNote=%q", m.previewNote.Title)
+	}
+	if len(m.previewHistory) != 1 || m.previewHistory[0] != a {
+		t.Fatal("histórico deveria conter A após seguir o link")
+	}
+
+	// Backspace volta para A
+	step(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.previewNote != a || len(m.previewHistory) != 0 {
+		t.Fatalf("Backspace deveria voltar para A; previewNote=%q", m.previewNote.Title)
+	}
+
+	// Enter edita (fecha preview + retorna comando)
+	mm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mm.(Model)
+	if m.previewOpen || cmd == nil {
+		t.Error("Enter no preview deveria editar: fechar painel e retornar comando")
 	}
 }
 
