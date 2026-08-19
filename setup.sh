@@ -4,12 +4,10 @@
 set -euo pipefail
 
 echo "==> Criando estrutura de diretórios..."
-mkdir -p notas/{cmd/notas,assets/themes}
-mkdir -p notas/internal/{app,config,model}
-mkdir -p notas/internal/tui/{keys,views,components/{fuzzy,float,props,statusbar}}
-mkdir -p notas/internal/{service,storage/{sqlite/migrations,markdown}}
-
-cd notas
+mkdir -p cmd/notas assets/themes
+mkdir -p internal/{app,config,model}
+mkdir -p internal/tui/{keys,views,components/{fuzzy,float,props,statusbar}}
+mkdir -p internal/{service,storage/{sqlite/migrations,markdown}}
 
 echo "==> Inicializando módulo Go..."
 go mod init github.com/seuusuario/notas
@@ -38,4 +36,4 @@ echo "==> Organizando go.mod..."
 go mod tidy
 
 echo ""
-echo "✓ Setup concluído! Execute: cd notas && go run ./cmd/notas"
+echo "✓ Setup concluído! Execute: go run ./cmd/notas"
